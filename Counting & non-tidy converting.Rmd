@@ -1,0 +1,264 @@
+---
+title: "Using tidytext"
+author: "Ayoub Bagheri"
+date: "11 februari 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Counting and correlating pairs of words
+
+1. Divide the harry potter books in sections of 10 sentences (instead of 10 lines as in the book), such that we can start investigating what words tend to appear within the same section. 
+
+```{r}
+library(harrypotter)
+library(dplyr)
+library(tidytext)
+library(tidyverse)
+library(widyr)
+library(igraph)
+library(ggplot2)
+library(ggraph)
+library(tm)
+library(SnowballC)
+set.seed(777)
+```
+
+```{r}
+# names of each book
+hp_books <- c("philosophers_stone", "chamber_of_secrets",
+              "prisoner_of_azkaban", "goblet_of_fire",
+              "order_of_the_phoenix", "half_blood_prince",
+              "deathly_hallows")
+
+# combine books into a list
+hp_words <- list(
+  philosophers_stone,
+  chamber_of_secrets,
+  prisoner_of_azkaban,
+  goblet_of_fire,
+  order_of_the_phoenix,
+  half_blood_prince,
+  deathly_hallows) %>%
+  # name each list element
+  set_names(hp_books) %>%
+  # convert each book to a data frame and merge into a single data frame
+  map_df(as_tibble, .id = "book") %>%
+  # convert book to a factor
+  mutate(book = factor(book, levels = hp_books)) %>%
+  # remove empty chapters
+  filter(!is.na(value)) %>%
+  # create a chapter id column
+  group_by(book) %>%
+  mutate(chapter = row_number(book)) %>%
+  # tokenize the data frame
+  unnest_tokens(sentence, value, token = "sentences") %>% 
+  ungroup()
+  
+hp_sections <- hp_words %>%  
+  mutate(section = row_number() %/% 10) %>% 
+#   group_by(section) %>% 
+  unnest_tokens(word, sentence) %>%
+  filter(!word %in% stop_words$word)
+
+```
+
+2. From the library widyr, use pairwise_count() to see which words co-appear most within the same section.   
+
+```{r}
+# count words co-occuring within sections
+word_pairs <- hp_sections %>%
+pairwise_count(word, section, sort = TRUE)
+word_pairs
+
+```
+
+```{r}
+word_pairs %>%
+filter(item1 == "harry")
+```
+
+
+3. Next, we will adjust for word count by obtaining the phi coefficient (measure of binary correlation) using the function pairwise_cor(). 
+
+```{r}
+# we need to filter for at least relatively common words first
+word_cors <- hp_sections %>%
+group_by(word) %>%
+filter(n() >= 20) %>%
+pairwise_cor(word, section, sort = TRUE)
+word_cors
+```
+
+```{r}
+word_cors %>%
+filter(item1 == "harry")
+```
+
+4. Think of five words from the Harry Potter lexicon for which you want to see to which words they are correlated most. Make a graph of your results.
+
+```{r}
+word_cors %>%
+filter(item1 %in% c("patronum", "expecto", "grubbly", "plank", "madame")) %>%
+group_by(item1) %>%
+top_n(6) %>%
+ungroup() %>%
+mutate(item2 = reorder(item2, correlation)) %>%
+ggplot(aes(item2, correlation)) +
+geom_bar(stat = "identity") +
+facet_wrap(~ item1, scales = "free") +
+coord_flip()
+
+```
+
+```{r}
+# set.seed(2016)
+word_cors %>%
+filter(correlation > .50) %>%
+graph_from_data_frame() %>%
+ggraph(layout = "fr") +
+geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+geom_node_point(color = "lightblue", size = 5) +
+geom_node_text(aes(label = name), repel = TRUE) +
+theme_void()
+
+```
+
+
+## Converting to and from non-tidy formats
+
+5. Make a document-term matrix (dtm) for the harry potter books, with considering books as documents (yes, we continue with Harry a little more)
+
+```{r}
+# combine books into a list
+hp_tokens <- list(
+  philosophers_stone,
+  chamber_of_secrets,
+  prisoner_of_azkaban,
+  goblet_of_fire,
+  order_of_the_phoenix,
+  half_blood_prince,
+  deathly_hallows
+) %>%
+  # name each list element
+  set_names(hp_books) %>%
+  # convert each book to a data frame and merge into a single data frame
+  map_df(as_tibble, .id = "book") %>%
+  # convert book to a factor
+  mutate(book = factor(book, levels = hp_books)) %>%
+  # remove empty chapters
+  filter(!is.na(value)) %>%
+  # create a chapter id column
+  group_by(book) %>%
+  mutate(chapter = row_number(book)) %>%
+  # tokenize the data frame
+  unnest_tokens(word, value)
+```
+
+```{r}
+hp_dtm <- hp_tokens %>%
+   # get count of each token in each document
+   count(book, word) %>%
+   # create a document-term matrix with all features and tf weighting
+   cast_dtm(document = book, term = word, value = n)
+```
+
+6. How many features does the dtm have? What is the sparsity of the dtm?
+
+```{r}
+hp_dtm
+```
+
+
+7.	Remove the stopwords from the dtm. How does this change matters?
+
+```{r}
+hp_dtm_without_sw <- hp_tokens %>%
+   ungroup() %>% 
+   filter(!word %in% stop_words$word) %>% 
+   # get count of each token in each document
+   count(book, word) %>%
+   # create a document-term matrix with all features and tf weighting
+   cast_dtm(document = book, term = word, value = n)
+
+hp_dtm_without_sw
+```
+
+
+8. Have a look on if you can find any R packages to do stemming for you (i.e., consolidating related words with the same root, see part 2.3.5 of the book of Aggerwal). Perform stemming on the dtm. 
+
+```{r}
+
+#dtm_new <- DocumentTermMatrix(hp_tokens)#, control = list(tolower = TRUE, removeNumbers = True, stem = TRUE))
+
+hp_dtm_without_sw_with_stemming <- hp_tokens %>%
+   ungroup() %>% 
+   filter(!word %in% stop_words$word) %>%
+   mutate(word = wordStem(word)) %>% 
+   # get count of each token in each document
+   count(book, word) %>%
+   # create a document-term matrix with all features and tf weighting
+   cast_dtm(document = book, term = word, value = n)
+
+
+hp_dtm_without_sw_with_stemming
+
+
+
+```
+
+
+9. Which words were ‘stemmed’ most often? How does this influence the number of features and sparsity? 
+
+```{r}
+hp_stems <- hp_tokens %>%
+   ungroup() %>% 
+   filter(!word %in% stop_words$word) %>%
+   mutate(stemword = wordStem(word))
+
+hp_stems
+
+inspect(hp_dtm_without_sw_with_stemming)
+
+```
+
+10.	Lets tidy up our dtm a little bit more. Remove features that in all documents, occur less than xx (for example, 1 or 5) times. How does this change our dtm in terms of number of features and sparsity?
+
+```{r}
+hp_dtm_remove_rare_words <- hp_stems %>%
+   select(-stemword) %>% 
+   # get count of each token in each document
+   count(book, word) %>%
+   filter(n > 5) %>% 
+   # create a document-term matrix with all features and tf weighting
+   cast_dtm(document = book, term = word, value = n)
+
+
+hp_dtm_remove_rare_words
+```
+
+```{r}
+removeSparseTerms(hp_dtm_remove_rare_words, sparse = .30)
+
+```
+
+
+11.	Write a function yourself to compute on your dtm: 
+o	the term frequency
+o	tf-idf (i.e., equation 2.1 and 2.2 Aggerwal)
+o	the cosine(X,Y) (i.e., equation 2.4 Aggerwal)
+-	report your results on applying your tf-idf and cosine function on the harry potter dtm, preferably in a graphical manner. 
+
+
+```{r}
+documentTermM <- function(tokens, weightingMethod){
+  dtm <- tokens %>% 
+    cast_dtm(document = book, term = word, value = n,
+           weighting = tm::weightingMethod)
+  dtm
+}
+```
+
