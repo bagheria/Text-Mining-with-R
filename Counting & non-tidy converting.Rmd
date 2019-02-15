@@ -255,9 +255,13 @@ o	the cosine(X,Y) (i.e., equation 2.4 Aggerwal)
 
 ```{r}
 documentTermM <- function(tokens, weightingMethod){
-  dtm <- tokens %>% 
-    cast_dtm(document = book, term = word, value = n,
-           weighting = tm::weightingMethod)
+  library(stringr)
+  
+  if str_detect() is
+  tokens_with_measure <- tokens %>% 
+    mutate(my_metric = )
+    
+  dtm <- cast_dtm(document = book, term = word, value = my_metric)
   dtm
 }
 ```
